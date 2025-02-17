@@ -61,6 +61,7 @@ mod models;
 
 pub use self::{models::*, util::*};
 
+use hex::FromHex;
 use jsonrpc_core::types::{Id, *};
 use monero::{
     blockdata::block::Block,
@@ -78,6 +79,7 @@ use std::{
     iter::{empty, once},
     num::NonZeroU64,
     ops::{Deref, RangeInclusive},
+    str::FromStr,
     sync::Arc,
     time::Duration,
 };
@@ -882,6 +884,62 @@ impl WalletClient {
         self.inner
             .request("get_accounts", RpcParams::map(params))
             .await
+    }
+
+    /// Make an integrated address from the wallet address and a payment id.
+    pub async fn make_integrated_address(
+        &self,
+        standard_address: Option<Address>,
+        payment_id: Option<PaymentId>,
+    ) -> anyhow::Result<(Address, PaymentId)> {
+        #[derive(Deserialize)]
+        struct Rsp {
+            integrated_address: String,
+            payment_id: HashString<Vec<u8>>,
+        }
+
+        let params = empty()
+            .chain(standard_address.map(|v| ("standard_address", v.to_string().into())))
+            .chain(payment_id.map(|v| ("payment_id", HashString(v).to_string().into())));
+
+        let rsp = self
+            .inner
+            .request::<Rsp>("make_integrated_address", RpcParams::map(params))
+            .await?;
+
+        Ok((
+            Address::from_str(&rsp.integrated_address)?,
+            PaymentId::from_hex(rsp.payment_id.to_string())?,
+        ))
+    }
+
+    /// Retrieve the standard address and payment id corresponding to an integrated address.
+    pub async fn split_integrated_address(
+        &self,
+        integrated_address: Address,
+    ) -> anyhow::Result<(bool, PaymentId, Address)> {
+        #[derive(Deserialize)]
+        struct Rsp {
+            is_subaddress: bool,
+            payment: HashString<Vec<u8>>,
+            standard_address: String,
+        }
+
+        let params = empty().chain(once((
+            "integrated_address",
+            integrated_address.to_string().into(),
+        )));
+
+        let rsp = self
+            .inner
+            .request::<Rsp>("split_integrated_address", RpcParams::map(params))
+            .await?;
+
+        Ok((
+            rsp.is_subaddress,
+            PaymentId::from_hex(rsp.payment.to_string())?,
+            Address::from_str(&rsp.standard_address)?,
+        ))
     }
 
     /// Get a list of incoming payments using a given payment id.
